@@ -1,0 +1,66 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model PolicySet {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  rules          PolicyRule[]
+  evaluationLogs EvaluationLog[]
+
+  @@map("policy_sets")
+}
+
+model PolicyRule {
+  id           String      @id @default(cuid())
+  policySetId  String
+  name         String
+  description  String?
+  effect       RuleEffect
+  conditionJson Json       // Stores the condition tree as JSON
+  priority     Int        @default(0) // Higher priority rules evaluated first
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  policySet PolicySet @relation(fields: [policySetId], references: [id], onDelete: Cascade)
+
+  @@map("policy_rules")
+  @@index([policySetId])
+}
+
+model EvaluationLog {
+  id          String   @id @default(cuid())
+  policySetId String
+  inputJson   Json     // The context that was evaluated
+  resultJson  Json     // The decision result with matched rules
+  decision    Decision
+  createdAt   DateTime @default(now())
+
+  policySet PolicySet @relation(fields: [policySetId], references: [id], onDelete: Cascade)
+
+  @@map("evaluation_logs")
+  @@index([policySetId])
+  @@index([createdAt])
+}
+
+enum RuleEffect {
+  ALLOW
+  DENY
+}
+
+enum Decision {
+  ALLOW
+  DENY
+}
