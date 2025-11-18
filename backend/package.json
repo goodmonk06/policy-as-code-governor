@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "description": "Backend API for Policy-as-Code engine",
   "main": "dist/index.js",
+  "bin": {
+    "policy-cli": "./dist/cli/index.js"
+  },
   "scripts": {
     "dev": "tsx watch src/index.ts",
     "build": "tsc",
@@ -13,11 +16,13 @@
     "db:migrate:deploy": "prisma migrate deploy",
     "db:seed": "tsx prisma/seed.ts",
     "db:studio": "prisma studio",
-    "db:generate": "prisma generate"
+    "db:generate": "prisma generate",
+    "cli": "tsx src/cli/index.ts"
   },
   "dependencies": {
     "@fastify/cors": "^8.5.0",
     "@prisma/client": "^5.7.1",
+    "commander": "^11.1.0",
     "fastify": "^4.25.2",
     "zod": "^3.22.4"
   },
