@@ -3,6 +3,9 @@ import { z } from 'zod';
 import { PrismaClient } from '@prisma/client';
 import { PolicyEvaluator } from '../engine/evaluator';
 import type { EvaluationContext, Condition } from '../types/policy';
+import { ValidationError, NotFoundError, formatErrorResponse } from '../lib/errors';
+import { logger } from '../lib/logger';
+import { metrics } from '../lib/metrics';
 
 const prisma = new PrismaClient();
 const evaluator = new PolicyEvaluator();
@@ -57,6 +60,8 @@ export async function policySetRoutes(fastify: FastifyInstance) {
     try {
       const body = createPolicySetSchema.parse(request.body);
 
+      logger.info('Creating policy set', { name: body.name, rulesCount: body.rules.length });
+
       const policySet = await prisma.policySet.create({
         data: {
           name: body.name,
@@ -76,12 +81,18 @@ export async function policySetRoutes(fastify: FastifyInstance) {
         }
       });
 
+      metrics.recordCounter('policy_set.created', 1, { rulesCount: body.rules.length });
+      logger.info('Policy set created', { id: policySet.id, name: policySet.name });
+
       return reply.code(201).send(policySet);
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return reply.code(400).send({ error: 'Validation error', details: error.errors });
+        const validationError = new ValidationError('Invalid request body', error.errors);
+        logger.warn('Validation error on create policy set', { errors: error.errors });
+        return reply.code(validationError.statusCode).send(formatErrorResponse(validationError, request.url));
       }
-      fastify.log.error(error);
+      logger.error('Failed to create policy set', error as Error);
+      metrics.recordCounter('policy_set.create_error', 1);
       return reply.code(500).send({ error: 'Internal server error' });
     }
   });
@@ -128,12 +139,15 @@ export async function policySetRoutes(fastify: FastifyInstance) {
       });
 
       if (!policySet) {
-        return reply.code(404).send({ error: 'PolicySet not found' });
+        const notFoundError = new NotFoundError('PolicySet', id);
+        logger.warn('Policy set not found', { id });
+        return reply.code(notFoundError.statusCode).send(formatErrorResponse(notFoundError, request.url));
       }
 
+      metrics.recordCounter('policy_set.fetched', 1);
       return reply.send(policySet);
     } catch (error) {
-      fastify.log.error(error);
+      logger.error('Failed to fetch policy set', error as Error, { id: request.params.id });
       return reply.code(500).send({ error: 'Internal server error' });
     }
   });
@@ -144,10 +158,14 @@ export async function policySetRoutes(fastify: FastifyInstance) {
       const { id } = request.params;
       const body = updatePolicySetSchema.parse(request.body);
 
+      logger.info('Updating policy set', { id, updates: Object.keys(body) });
+
       // Check if policy set exists
       const existing = await prisma.policySet.findUnique({ where: { id } });
       if (!existing) {
-        return reply.code(404).send({ error: 'PolicySet not found' });
+        const notFoundError = new NotFoundError('PolicySet', id);
+        logger.warn('Policy set not found for update', { id });
+        return reply.code(notFoundError.statusCode).send(formatErrorResponse(notFoundError, request.url));
       }
 
       // Update policy set and rules
@@ -188,12 +206,18 @@ export async function policySetRoutes(fastify: FastifyInstance) {
         });
       });
 
+      metrics.recordCounter('policy_set.updated', 1);
+      logger.info('Policy set updated', { id });
+
       return reply.send(policySet);
     } catch (error) {
       if (error instanceof z.ZodError) {
-        return reply.code(400).send({ error: 'Validation error', details: error.errors });
+        const validationError = new ValidationError('Invalid request body', error.errors);
+        logger.warn('Validation error on update policy set', { id: request.params.id, errors: error.errors });
+        return reply.code(validationError.statusCode).send(formatErrorResponse(validationError, request.url));
       }
-      fastify.log.error(error);
+      logger.error('Failed to update policy set', error as Error, { id: request.params.id });
+      metrics.recordCounter('policy_set.update_error', 1);
       return reply.code(500).send({ error: 'Internal server error' });
     }
   });
@@ -216,9 +240,12 @@ export async function policySetRoutes(fastify: FastifyInstance) {
 
   // Evaluate a PolicySet against a context
   fastify.post<{ Params: { id: string } }>('/policy-sets/:id/evaluate', async (request, reply) => {
+    const startTime = Date.now();
     try {
       const { id } = request.params;
       const body = evaluateSchema.parse(request.body);
+
+      logger.info('Evaluating policy set', { id, contextKeys: Object.keys(body.context) });
 
       // Fetch policy set with rules
       const policySet = await prisma.policySet.findUnique({
@@ -229,7 +256,9 @@ export async function policySetRoutes(fastify: FastifyInstance) {
       });
 
       if (!policySet) {
-        return reply.code(404).send({ error: 'PolicySet not found' });
+        const notFoundError = new NotFoundError('PolicySet', id);
+        logger.warn('Policy set not found for evaluation', { id });
+        return reply.code(notFoundError.statusCode).send(formatErrorResponse(notFoundError, request.url));
       }
 
       // Convert Prisma rules to PolicyRule format
@@ -254,12 +283,27 @@ export async function policySetRoutes(fastify: FastifyInstance) {
         }
       });
 
+      const duration = Date.now() - startTime;
+      metrics.recordHistogram('policy.evaluation.duration_ms', duration);
+      metrics.recordCounter('policy.evaluation.total', 1, { decision: result.decision });
+
+      logger.info('Policy evaluation completed', {
+        id,
+        decision: result.decision,
+        matchedRules: result.matchedRules.length,
+        durationMs: duration
+      });
+
       return reply.send(result);
     } catch (error) {
+      const duration = Date.now() - startTime;
       if (error instanceof z.ZodError) {
-        return reply.code(400).send({ error: 'Validation error', details: error.errors });
+        const validationError = new ValidationError('Invalid evaluation request', error.errors);
+        logger.warn('Validation error on evaluation', { id: request.params.id, errors: error.errors });
+        return reply.code(validationError.statusCode).send(formatErrorResponse(validationError, request.url));
       }
-      fastify.log.error(error);
+      logger.error('Policy evaluation failed', error as Error, { id: request.params.id, durationMs: duration });
+      metrics.recordCounter('policy.evaluation.error', 1);
       return reply.code(500).send({ error: 'Internal server error' });
     }
   });

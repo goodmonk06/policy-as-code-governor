@@ -11,33 +11,47 @@ datasource db {
 }
 
 model PolicySet {
-  id          String   @id @default(cuid())
-  name        String
-  description String?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id              String    @id @default(cuid())
+  name            String
+  description     String?
+  category        String?   // e.g., "access-control", "compliance", "security"
+  isActive        Boolean   @default(true)
+  lastEvaluatedAt DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
 
-  rules          PolicyRule[]
-  evaluationLogs EvaluationLog[]
+  rules           PolicyRule[]
+  evaluationLogs  EvaluationLog[]
+  versions        PolicyVersion[]
+  comments        PolicyComment[]
+  tags            PolicySetTag[]
+  metrics         EvaluationMetrics[]
 
   @@map("policy_sets")
+  @@index([category])
+  @@index([isActive])
 }
 
 model PolicyRule {
-  id           String      @id @default(cuid())
-  policySetId  String
-  name         String
-  description  String?
-  effect       RuleEffect
-  conditionJson Json       // Stores the condition tree as JSON
-  priority     Int        @default(0) // Higher priority rules evaluated first
-  createdAt    DateTime   @default(now())
-  updatedAt    DateTime   @updatedAt
+  id            String      @id @default(cuid())
+  policySetId   String
+  name          String
+  description   String?
+  effect        RuleEffect
+  conditionJson Json        // Stores the condition tree as JSON
+  priority      Int         @default(0) // Higher priority rules evaluated first
+  isEnabled     Boolean     @default(true)
+  validFrom     DateTime?   // Optional: rule only active after this date
+  validUntil    DateTime?   // Optional: rule expires after this date
+  metadata      Json?       // Additional metadata for extensions
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
 
   policySet PolicySet @relation(fields: [policySetId], references: [id], onDelete: Cascade)
 
   @@map("policy_rules")
   @@index([policySetId])
+  @@index([isEnabled])
 }
 
 model EvaluationLog {
@@ -46,6 +60,10 @@ model EvaluationLog {
   inputJson   Json     // The context that was evaluated
   resultJson  Json     // The decision result with matched rules
   decision    Decision
+  durationMs  Int?     // Evaluation duration in milliseconds
+  errorMessage String?  // If evaluation failed
+  userId      String?  // Who triggered the evaluation
+  metadata    Json?    // Additional context
   createdAt   DateTime @default(now())
 
   policySet PolicySet @relation(fields: [policySetId], references: [id], onDelete: Cascade)
@@ -53,6 +71,102 @@ model EvaluationLog {
   @@map("evaluation_logs")
   @@index([policySetId])
   @@index([createdAt])
+  @@index([decision])
+  @@index([userId])
+}
+
+model PolicyVersion {
+  id                 String   @id @default(cuid())
+  policySetId        String
+  versionNumber      Int
+  name               String
+  description        String?
+  rulesSnapshot      Json     // Complete snapshot of rules at this version
+  changeDescription  String?  // What changed in this version
+  createdBy          String?  // User who created this version
+  createdAt          DateTime @default(now())
+
+  policySet PolicySet @relation(fields: [policySetId], references: [id], onDelete: Cascade)
+
+  @@map("policy_versions")
+  @@unique([policySetId, versionNumber])
+  @@index([policySetId])
+  @@index([createdAt])
+}
+
+model Tag {
+  id          String   @id @default(cuid())
+  name        String   @unique
+  color       String?  // Hex color for UI
+  description String?
+  createdAt   DateTime @default(now())
+
+  policySets PolicySetTag[]
+
+  @@map("tags")
+}
+
+model PolicySetTag {
+  policySetId String
+  tagId       String
+
+  policySet PolicySet @relation(fields: [policySetId], references: [id], onDelete: Cascade)
+  tag       Tag       @relation(fields: [tagId], references: [id], onDelete: Cascade)
+
+  @@id([policySetId, tagId])
+  @@map("policy_set_tags")
+}
+
+model PolicyTemplate {
+  id            String   @id @default(cuid())
+  name          String
+  description   String?
+  category      String?
+  rulesTemplate Json     // Template rules with variable placeholders
+  variables     Json     // Variable definitions (name, type, description, default)
+  exampleUsage  String?  // Example of how to use this template
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@map("policy_templates")
+  @@index([category])
+}
+
+model PolicyComment {
+  id          String   @id @default(cuid())
+  policySetId String
+  userId      String   // User who created the comment
+  content     String
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  policySet PolicySet @relation(fields: [policySetId], references: [id], onDelete: Cascade)
+
+  @@map("policy_comments")
+  @@index([policySetId])
+  @@index([createdAt])
+}
+
+model EvaluationMetrics {
+  id               String   @id @default(cuid())
+  policySetId      String
+  date             DateTime @db.Date
+  totalEvaluations Int      @default(0)
+  allowCount       Int      @default(0)
+  denyCount        Int      @default(0)
+  errorCount       Int      @default(0)
+  avgDurationMs    Float?
+  minDurationMs    Int?
+  maxDurationMs    Int?
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  policySet PolicySet @relation(fields: [policySetId], references: [id], onDelete: Cascade)
+
+  @@unique([policySetId, date])
+  @@map("evaluation_metrics")
+  @@index([policySetId])
+  @@index([date])
 }
 
 enum RuleEffect {

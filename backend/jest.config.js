@@ -6,6 +6,17 @@ module.exports = {
   collectCoverageFrom: [
     'src/**/*.ts',
     '!src/**/*.d.ts',
-    '!src/**/*.test.ts'
-  ]
+    '!src/**/*.test.ts',
+    '!src/**/index.ts'
+  ],
+  moduleNameMapper: {
+    '^@/(.*)$': '<rootDir>/src/$1'
+  },
+  globals: {
+    'ts-jest': {
+      tsconfig: {
+        esModuleInterop: true
+      }
+    }
+  }
 };
